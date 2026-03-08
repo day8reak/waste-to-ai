@@ -1,0 +1,43 @@
+{
+  "server_host": "0.0.0.0",
+  "server_port": 8080,
+  "mock_mode": true,
+  "mock_gpu_count": 4,
+  "mock_gpus": [
+    {
+      "id": "gpu0",
+      "model": "V100",
+      "memory": 32768,
+      "node": "node1"
+    },
+    {
+      "id": "gpu1",
+      "model": "V100",
+      "memory": 32768,
+      "node": "node1"
+    },
+    {
+      "id": "gpu2",
+      "model": "3090",
+      "memory": 24576,
+      "node": "node2"
+    },
+    {
+      "id": "gpu3",
+      "model": "4090",
+      "memory": 24576,
+      "node": "node3"
+    }
+  ],
+  "docker_endpoint": "unix:///var/run/docker.sock",
+  "default_priority": 5,
+  "preempt_enabled": true,
+  "monitor_interval": "5s",
+  "ray_integration": {
+    "enabled": true,
+    "default_gpu_model": "",
+    "default_priority": 8,
+    "scale_down_grace_period": "30s",
+    "reserved_gpus": 0
+  }
+}
