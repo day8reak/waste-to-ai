@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU 调度管理平台</title>
+    <link rel="stylesheet" href="static/css/style.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">GPU 调度</span>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item" :class="{ active: currentView === 'dashboard' }" @click.prevent="currentView = 'dashboard'">
+                    <span class="nav-icon">📊</span>
+                    <span>仪表盘</span>
+                </a>
+                <a href="#" class="nav-item" :class="{ active: currentView === 'gpus' }" @click.prevent="currentView = 'gpus'">
+                    <span class="nav-icon">🎮</span>
+                    <span>GPU 管理</span>
+                </a>
+                <a href="#" class="nav-item" :class="{ active: currentView === 'tasks' }" @click.prevent="currentView = 'tasks'">
+                    <span class="nav-icon">📋</span>
+                    <span>任务管理</span>
+                </a>
+                <a href="#" class="nav-item" :class="{ active: currentView === 'deploy' }" @click.prevent="currentView = 'deploy'">
+                    <span class="nav-icon">🚀</span>
+                    <span>一键部署</span>
+                </a>
+                <a href="#" class="nav-item" :class="{ active: currentView === 'ray' }" @click.prevent="currentView = 'ray'">
+                    <span class="nav-icon">☁️</span>
+                    <span>Ray 管理</span>
+                </a>
+            </nav>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 顶部栏 -->
+            <header class="topbar">
+                <h1 class="page-title" @click="handleLogoClick" style="cursor: pointer;">{{ pageTitle }}</h1>
+                <div class="header-actions">
+                    <button class="btn btn-refresh" @click="refreshData">🔄 刷新</button>
+                </div>
+            </header>
+
+            <!-- 隐藏的开发面板 (通过后门解锁) -->
+            <div v-if="showDevPanel" class="dev-panel">
+                <h3>🔓 开发者模式</h3>
+                <div class="dev-option">
+                    <label>GPU 数量:</label>
+                    <input type="number" v-model="gpuCountOption" min="1" max="100" class="dev-input">
+                    <button @click="applyGPUCount" class="btn btn-primary">应用</button>
+                </div>
+                <div class="dev-option">
+                    <label>模式:</label>
+                    <button @click="toggleMockMode" class="btn" :class="isMockMode ? 'btn-warning' : 'btn-primary'">
+                        {{ isMockMode ? '🧪 Mock模式' : '🌐 真实API' }}
+                    </button>
+                </div>
+                <p class="dev-hint">提示: 按 ↑↑↓↓←→←→BA 或连续点击 Logo 5 次</p>
+            </div>
+
+            <!-- 仪表盘视图 -->
+            <div v-if="currentView === 'dashboard'" class="view-container">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon gpu-icon">🎮</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ stats.totalGPUs }}</div>
+                            <div class="stat-label">总 GPU</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon available-icon">✅</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ stats.availableGPUs }}</div>
+                            <div class="stat-label">可用 GPU</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon running-icon">🔄</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ stats.runningTasks }}</div>
+                            <div class="stat-label">运行中</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon pending-icon">⏳</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ stats.pendingTasks }}</div>
+                            <div class="stat-label">排队中</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3 class="card-title">GPU 状态</h3>
+                        <div class="gpu-status-list">
+                            <div v-for="gpu in gpus" :key="gpu.id" class="gpu-status-item" :class="gpu.status">
+                                <span class="gpu-id">{{ gpu.id }}</span>
+                                <span class="gpu-model">{{ gpu.model }}</span>
+                                <span class="gpu-status-badge" :class="gpu.status">{{ gpu.status }}</span>
+                            </div>
+                            <div v-if="gpus.length === 0" class="empty-state">暂无 GPU 数据</div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3 class="card-title">最近任务</h3>
+                        <div class="task-list">
+                            <div v-for="task in recentTasks" :key="task.id" class="task-item">
+                                <div class="task-info">
+                                    <span class="task-name">{{ task.name || task.id }}</span>
+                                    <span class="task-time">{{ formatTime(task.created_at) }}</span>
+                                </div>
+                                <span class="task-status-badge" :class="task.status">{{ task.status }}</span>
+                            </div>
+                            <div v-if="recentTasks.length === 0" class="empty-state">暂无任务</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GPU 管理视图 -->
+            <div v-if="currentView === 'gpus'" class="view-container">
+                <div class="card">
+                    <h3 class="card-title">GPU 列表</h3>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>型号</th>
+                                <th>状态</th>
+                                <th>任务 ID</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="gpu in gpus" :key="gpu.id">
+                                <td>{{ gpu.id }}</td>
+                                <td>{{ gpu.model }}</td>
+                                <td>
+                                    <span class="status-badge" :class="gpu.status">{{ gpu.status }}</span>
+                                </td>
+                                <td>{{ gpu.task_name || gpu.task_id || '-' }}</td>
+                                <td>
+                                    <!-- 释放：从推理服务中释放GPU，GPU变为idle可给其他任务使用 -->
+                                    <button v-if="gpu.status === 'allocated'" class="btn btn-sm btn-warning" @click="blockGPU(gpu.id)">释放</button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-if="gpus.length === 0" class="empty-state">暂无 GPU 数据</div>
+                </div>
+            </div>
+
+            <!-- 任务管理视图 -->
+            <div v-if="currentView === 'tasks'" class="view-container">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">任务列表</h3>
+                        <div class="filter-group">
+                            <select v-model="taskFilter" class="filter-select">
+                                <option value="">全部</option>
+                                <option value="pending">排队中</option>
+                                <option value="running">运行中</option>
+                                <option value="completed">已完成</option>
+                            </select>
+                        </div>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>名称</th>
+                                <th>命令</th>
+                                <th>GPU</th>
+                                <th>类型</th>
+                                <th>状态</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="task in filteredTasks" :key="task.id">
+                                <td class="task-id">{{ task.id }}</td>
+                                <td>{{ task.name || '-' }}</td>
+                                <td class="task-command">{{ task.command }}</td>
+                                <td>
+                                    <span v-if="task.min_gpu_required || task.max_gpu_required">
+                                        {{ task.gpu_required }} ({{ task.min_gpu_required }}-{{ task.max_gpu_required }})
+                                    </span>
+                                    <span v-else>{{ task.gpu_required }}</span>
+                                </td>
+                                <td>
+                                    <span v-if="task.dynamic" class="status-badge" style="background: #10b981; color: white;">动态</span>
+                                    <span v-else class="status-badge" style="background: #6b7280; color: white;">固定</span>
+                                </td>
+                                <td><span class="status-badge" :class="task.status">{{ task.status }}</span></td>
+                                <td>{{ formatTime(task.created_at) }}</td>
+                                <td>
+                                    <button v-if="task.status === 'running'" class="btn btn-sm btn-danger" @click="killTask(task.id)">终止</button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-if="filteredTasks.length === 0" class="empty-state">暂无任务</div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">提交新任务</h3>
+                    <form @submit.prevent="submitTask" class="task-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>任务名称</label>
+                                <input v-model="newTask.name" type="text" placeholder="可选" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Docker 镜像</label>
+                                <input v-model="newTask.image" type="text" placeholder="例如: pytorch:2.0" class="form-input" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>执行命令</label>
+                                <input v-model="newTask.command" type="text" placeholder="例如: python train.py" class="form-input" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>GPU 数量 (初始)</label>
+                                <input v-model.number="newTask.gpu_required" type="number" min="1" max="8" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label>最低 GPU 数 (保护)</label>
+                                <input v-model.number="newTask.min_gpu_required" type="number" min="1" max="8" class="form-input" placeholder="最低保障">
+                            </div>
+                            <div class="form-group">
+                                <label>最高 GPU 数</label>
+                                <input v-model.number="newTask.max_gpu_required" type="number" min="1" max="8" class="form-input" placeholder="最高上限">
+                            </div>
+                            <div class="form-group">
+                                <label>GPU 型号</label>
+                                <select v-model="newTask.gpu_model" class="form-input">
+                                    <option value="">任意</option>
+                                    <option value="V100">V100</option>
+                                    <option value="A100">A100</option>
+                                    <option value="RTX 3090">RTX 3090</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>优先级 (1-10)</label>
+                                <input v-model.number="newTask.priority" type="number" min="1" max="10" class="form-input">
+                            </div>
+                            <div class="form-group" style="display: flex; align-items: center;">
+                                <label style="display: flex; align-items: center; cursor: pointer;">
+                                    <input type="checkbox" v-model="newTask.dynamic" style="margin-right: 8px;">
+                                    <span>支持动态调整GPU（检测到空闲GPU时自动扩缩容）</span>
+                                </label>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">提交任务</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- 一键部署视图 -->
+            <div v-if="currentView === 'deploy'" class="view-container">
+                <div class="card">
+                    <h3 class="card-title">预设模型部署</h3>
+                    <div class="model-grid">
+                        <div v-for="model in presetModels" :key="model.name" class="model-card">
+                            <div class="model-icon">{{ model.icon }}</div>
+                            <div class="model-name">{{ model.name }}</div>
+                            <div class="model-info">
+                                <span>GPU: {{ model.gpu }}</span>
+                                <span>镜像: {{ model.image }}</span>
+                            </div>
+                            <button class="btn btn-primary" @click="deployModel(model)">部署</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">自定义部署</h3>
+                    <form @submit.prevent="submitDeployTask" class="task-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>模型名称</label>
+                                <input v-model="deployConfig.name" type="text" placeholder="自定义模型名称" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Docker 镜像</label>
+                                <input v-model="deployConfig.image" type="text" placeholder="镜像地址" class="form-input" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>GPU 数量</label>
+                                <input v-model.number="deployConfig.gpu_required" type="number" min="1" max="8" value="1" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label>GPU 型号</label>
+                                <select v-model="deployConfig.gpu_model" class="form-input">
+                                    <option value="">任意</option>
+                                    <option value="V100">V100</option>
+                                    <option value="A100">A100</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">开始部署</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Ray 管理视图 -->
+            <div v-if="currentView === 'ray'" class="view-container">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">🎮</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ rayStatus.total_gpus }}</div>
+                            <div class="stat-label">总 GPU</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon available-icon">✅</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ rayStatus.available_gpus }}</div>
+                            <div class="stat-label">可用</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon running-icon">🔄</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ rayStatus.allocated_gpus }}</div>
+                            <div class="stat-label">已分配</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon blocked-icon">🚫</div>
+                        <div class="stat-content">
+                            <div class="stat-value">{{ rayStatus.blocked_gpus }}</div>
+                            <div class="stat-label">已阻塞</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Ray 任务</h3>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>GPU 数量</th>
+                                <th>GPU ID</th>
+                                <th>类型</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="task in rayStatus.ray_tasks" :key="task.id">
+                                <td>{{ task.ray_job_id }}</td>
+                                <td>
+                                    <span v-if="task.min_gpu_required || task.max_gpu_required">
+                                        {{ task.gpu_required }} ({{ task.min_gpu_required }}-{{ task.max_gpu_required }})
+                                    </span>
+                                    <span v-else>{{ task.gpu_required }}</span>
+                                </td>
+                                <td>{{ task.gpu_assigned?.join(', ') || '-' }}</td>
+                                <td>
+                                    <span v-if="task.dynamic" class="status-badge" style="background: #10b981; color: white;">动态</span>
+                                    <span v-else class="status-badge" style="background: #6b7280; color: white;">固定</span>
+                                </td>
+                                <td><span class="status-badge" :class="task.status">{{ task.status }}</span></td>
+                                <td>
+                                    <button class="btn btn-sm btn-warning" @click="releaseGPUs(task.ray_job_id)">释放 GPU</button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-if="!rayStatus.ray_tasks || rayStatus.ray_tasks.length === 0" class="empty-state">暂无 Ray 任务</div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Ray GPU 分配</h3>
+                    <form @submit.prevent="allocateRayGPUs" class="task-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Job ID</label>
+                                <input v-model="rayAlloc.job_id" type="text" placeholder="Ray Job ID" class="form-input" required>
+                            </div>
+                            <div class="form-group">
+                                <label>GPU 数量 (初始)</label>
+                                <input v-model.number="rayAlloc.gpu_count" type="number" min="1" max="100" value="1" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label>最低 GPU (保护)</label>
+                                <input v-model.number="rayAlloc.min_gpu_required" type="number" min="1" max="100" value="1" class="form-input" placeholder="最低保障">
+                            </div>
+                            <div class="form-group">
+                                <label>最高 GPU</label>
+                                <input v-model.number="rayAlloc.max_gpu_required" type="number" min="1" max="100" value="8" class="form-input" placeholder="最高上限">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>GPU 型号</label>
+                                <select v-model="rayAlloc.gpu_model" class="form-input">
+                                    <option value="">任意</option>
+                                    <option value="V100">V100</option>
+                                    <option value="A100">A100</option>
+                                    <option value="RTX 3090">RTX 3090</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>优先级</label>
+                                <input v-model.number="rayAlloc.priority" type="number" min="1" max="10" value="5" class="form-input">
+                            </div>
+                            <div class="form-group" style="display: flex; align-items: center;">
+                                <label style="display: flex; align-items: center; cursor: pointer;">
+                                    <input type="checkbox" v-model="rayAlloc.dynamic" style="margin-right: 8px;">
+                                    <span>支持动态调整（检测到空闲GPU时自动扩缩容）</span>
+                                </label>
+                            </div>
+                        </div>
+                        <!-- GPU 选择 -->
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label>选择指定 GPU (可选):</label>
+                            <div class="gpu-selector">
+                                <label v-for="gpu in gpus" :key="gpu.id" class="gpu-checkbox" :class="{ disabled: gpu.status !== 'idle', selected: rayAlloc.selected_gpus && rayAlloc.selected_gpus.includes(gpu.id) }">
+                                    <input type="checkbox" :value="gpu.id" v-model="rayAlloc.selected_gpus" :disabled="gpu.status !== 'idle'">
+                                    <span class="gpu-check-id">{{ gpu.id }}</span>
+                                    <span class="gpu-check-model">{{ gpu.model }}</span>
+                                </label>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">分配 GPU</button>
+                    </form>
+                </div>
+            </div>
+        </main>
+
+        <!-- 消息提示 -->
+        <div class="toast" :class="toast.type" v-if="toast.show">
+            {{ toast.message }}
+        </div>
+    </div>
+
+    <script src="static/js/app.js"></script>
+</body>
+</html>

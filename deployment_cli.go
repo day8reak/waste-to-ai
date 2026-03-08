@@ -612,14 +612,8 @@ func testGPUMemoryAllocation() {
 	gpu := gpus[0].(map[string]interface{})
 	memory := int(gpu["memory"].(float64))
 
-	// 尝试分配请求内存
-	body2 := []byte(fmt.Sprintf(`{
-		"name": "mem-test",
-		"command": "echo test",
-		"image": "ubuntu:latest",
-		"gpu_required": 1,
-		"priority": 5
-	}`)
+	// Test memory allocation
+	body2 := []byte("{\"name\":\"mem-test\",\"command\":\"echo test\",\"image\":\"ubuntu:latest\",\"gpu_required\":1,\"priority\":5}")
 
 	resp2, _ := http.Post(baseURL+"/api/tasks", "application/json", bytes.NewReader(body2))
 	defer resp2.Body.Close()

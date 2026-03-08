@@ -387,8 +387,9 @@ func TestReleaseGPUFromRayTask(t *testing.T) {
 	dockerMgr := docker.NewDockerManager(cfg.DockerEndpoint, cfg.MockMode)
 	sched := NewScheduler(gpuMgr, dockerMgr, true)
 
-	// 创建一个需要 2 个 GPU 的 Ray 任务
+	// 创建一个需要 2 个 GPU 的 Ray 任务，设置最低保障为1以允许释放
 	rayTask := models.NewRayTask("ray-scaling", 2, "", 8)
+	rayTask.MinGPURequired = 1  // 允许释放到1个GPU
 	err := sched.SubmitTask(rayTask)
 	if err != nil {
 		t.Fatalf("SubmitTask failed: %v", err)

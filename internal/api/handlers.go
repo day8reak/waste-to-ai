@@ -57,12 +57,15 @@ func NewHandler(sched *scheduler.Scheduler, gpuMgr gpu.GPUManager) *Handler {
 //   "priority": 5
 // }
 type SubmitTaskRequest struct {
-	Name        string `json:"name"`         // 任务名称（可选）
-	Command     string `json:"command"`       // 执行命令（必需）
-	Image       string `json:"image"`         // Docker镜像（必需）
-	GPURequired int    `json:"gpu_required"`  // 需要GPU数量，默认1
-	GPUModel    string `json:"gpu_model"`     // 指定GPU型号（可选）
-	Priority    int    `json:"priority"`     // 优先级1-10，默认5
+	Name           string `json:"name"`            // 任务名称（可选）
+	Command        string `json:"command"`          // 执行命令（必需）
+	Image          string `json:"image"`            // Docker镜像（必需）
+	GPURequired    int    `json:"gpu_required"`    // 需要GPU数量，默认1
+	MinGPURequired int    `json:"min_gpu_required"` // 最低GPU数量（动态任务）
+	MaxGPURequired int    `json:"max_gpu_required"` // 最高GPU数量（动态任务）
+	Dynamic        bool   `json:"dynamic"`         // 是否支持动态调整GPU
+	GPUModel       string `json:"gpu_model"`       // 指定GPU型号（可选）
+	Priority       int    `json:"priority"`        // 优先级1-10，默认5
 }
 
 // SubmitTaskResponse 任务提交响应结构
@@ -81,10 +84,13 @@ type SubmitTaskResponse struct {
 //   "priority": 8
 // }
 type RayAllocateRequest struct {
-	JobID     string `json:"job_id"`      // Ray Job ID（必需）
-	GPUCount  int    `json:"gpu_count"`   // 需要GPU数量，默认1
-	GPUModel  string `json:"gpu_model"`   // 指定GPU型号（可选）
-	Priority  int    `json:"priority"`   // 优先级1-10，默认5
+	JobID          string `json:"job_id"`            // Ray Job ID（必需）
+	GPUCount       int    `json:"gpu_count"`        // 需要GPU数量，默认1
+	MinGPURequired int    `json:"min_gpu_required"` // 最低GPU数量（动态任务）
+	MaxGPURequired int    `json:"max_gpu_required"` // 最高GPU数量（动态任务）
+	Dynamic        bool   `json:"dynamic"`          // 是否支持动态调整GPU
+	GPUModel       string `json:"gpu_model"`       // 指定GPU型号（可选）
+	Priority       int    `json:"priority"`         // 优先级1-10，默认5
 }
 
 // RayAllocateResponse Ray分配GPU响应结构
@@ -221,9 +227,20 @@ func (h *Handler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 	if req.Priority <= 0 {
 		req.Priority = 5
 	}
+	// 默认值处理
+	if req.MinGPURequired <= 0 {
+		req.MinGPURequired = req.GPURequired
+	}
+	if req.MaxGPURequired <= 0 {
+		req.MaxGPURequired = req.GPURequired
+	}
 
 	// 步骤4: 创建任务对象
 	task := models.NewTask(req.Name, req.Command, req.Image, req.GPURequired, req.GPUModel, req.Priority)
+	// 设置动态调整字段
+	task.MinGPURequired = req.MinGPURequired
+	task.MaxGPURequired = req.MaxGPURequired
+	task.Dynamic = req.Dynamic
 
 	// 步骤5: 提交任务到调度器
 	if err := h.scheduler.SubmitTask(task); err != nil {
@@ -444,9 +461,20 @@ func (h *Handler) RayAllocate(w http.ResponseWriter, r *http.Request) {
 	if req.Priority <= 0 {
 		req.Priority = 5
 	}
+	// 默认值处理
+	if req.MinGPURequired <= 0 {
+		req.MinGPURequired = req.GPUCount
+	}
+	if req.MaxGPURequired <= 0 {
+		req.MaxGPURequired = req.GPUCount
+	}
 
 	// 步骤4: 创建Ray任务
 	task := models.NewRayTask(req.JobID, req.GPUCount, req.GPUModel, req.Priority)
+	// 设置动态调整字段
+	task.MinGPURequired = req.MinGPURequired
+	task.MaxGPURequired = req.MaxGPURequired
+	task.Dynamic = req.Dynamic
 
 	// 步骤5: 提交任务到调度器
 	if err := h.scheduler.SubmitTask(task); err != nil {
@@ -620,21 +648,43 @@ func (h *Handler) RayBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 步骤3: 阻塞GPU
-	var blocked []string
+	// 步骤3: 释放GPU（从推理服务中真正释放）
+	// 释放后GPU变为idle，可给其他训练任务使用
+	// 推理服务检测到GPU减少后会自动调整（降低吞吐）
+	// 注意：ReleaseGPUFromTask 内部已经调用了 gpuManager.ReleaseGPU 使GPU变为idle，
+	// 所以这里不需要再调用 BlockGPU
+	var released []string
+	var affectedTasks []string
 	for _, gpuID := range req.GPUIDs {
-		if err := h.gpuMgr.BlockGPU(gpuID); err != nil {
-			h.writeError(w, http.StatusBadRequest, err.Error())
-			return
+		// 查找使用该GPU的任务
+		tasks := h.scheduler.GetTasksByGPUID(gpuID)
+		for _, task := range tasks {
+			// 从任务中释放该GPU（内部会调用gpuManager.ReleaseGPU使GPU变为idle）
+			_, err := h.scheduler.ReleaseGPUFromTask(task.ID, []string{gpuID})
+			if err != nil {
+				// 记录错误但继续处理其他GPU
+				fmt.Printf("Warning: failed to release GPU %s from task %s: %v\n", gpuID, task.ID, err)
+			}
+			affectedTasks = append(affectedTasks, fmt.Sprintf("%s(from %s)", gpuID, task.Name))
 		}
-		blocked = append(blocked, gpuID)
+
+		// 检查GPU是否已经是idle状态（如果没有任务使用它）
+		gpu, err := h.gpuMgr.GetGPUByID(gpuID)
+		if err == nil && gpu.Status != models.GPUStatusIdle {
+			// GPU仍被占用但没有任务关联，可能是孤立状态，强制释放
+			if err := h.gpuMgr.BlockGPU(gpuID); err != nil {
+				h.writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		released = append(released, gpuID)
 	}
 
 	// 步骤4: 返回成功响应
-	message := fmt.Sprintf("%d GPU(s) blocked successfully, they will not be used for inference until unblocked", len(blocked))
+	message := fmt.Sprintf("%d GPU(s) released successfully. Released GPUs can now be used by other tasks (e.g., training). Inference tasks will detect GPU loss and reduce throughput accordingly.", len(released))
 	h.writeJSON(w, http.StatusOK, RayBlockResponse{
-		Status:  "blocked",
-		Blocked: blocked,
+		Status:  "released",
+		Blocked: released,
 		Message: message,
 	})
 }

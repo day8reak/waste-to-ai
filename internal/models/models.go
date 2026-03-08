@@ -51,22 +51,25 @@ const (
 //   - RayJobID: Ray Job ID（Ray任务专用）
 //   - IsRayTask: 是否为Ray任务
 type Task struct {
-	ID           string     `json:"id" yaml:"id"`                     // 唯一ID
-	Name         string     `json:"name" yaml:"name"`                 // 任务名称
-	Command      string     `json:"command" yaml:"command"`          // 执行命令
-	Image        string     `json:"image" yaml:"image"`              // Docker镜像
-	GPURequired  int        `json:"gpu_required" yaml:"gpu_required"` // 需要GPU数量
-	GPUModel     string     `json:"gpu_model" yaml:"gpu_model"`      // 指定GPU型号
-	Priority     int        `json:"priority" yaml:"priority"`         // 优先级 1-10
-	Status       TaskStatus `json:"status" yaml:"status"`           // 当前状态
-	GPUAssigned  []string   `json:"gpu_assigned" yaml:"gpu_assigned"` // 已分配GPU
-	ContainerID  string     `json:"container_id" yaml:"container_id"` // 容器ID
-	ErrorMsg     string     `json:"error_msg" yaml:"error_msg"`     // 错误信息
-	CreatedAt    time.Time  `json:"created_at" yaml:"created_at"`    // 创建时间
-	StartedAt    *time.Time `json:"started_at" yaml:"started_at"`   // 开始时间
-	FinishedAt   *time.Time `json:"finished_at" yaml:"finished_at"`  // 结束时间
-	RayJobID     string     `json:"ray_job_id" yaml:"ray_job_id"`   // Ray Job ID
-	IsRayTask    bool       `json:"is_ray_task" yaml:"is_ray_task"`  // 是否为Ray任务
+	ID            string     `json:"id" yaml:"id"`                      // 唯一ID
+	Name          string     `json:"name" yaml:"name"`                  // 任务名称
+	Command       string     `json:"command" yaml:"command"`           // 执行命令
+	Image         string     `json:"image" yaml:"image"`               // Docker镜像
+	GPURequired   int        `json:"gpu_required" yaml:"gpu_required"`  // 需要GPU数量
+	MinGPURequired int       `json:"min_gpu_required" yaml:"min_gpu_required"` // 最低GPU数量（动态任务）
+	MaxGPURequired int       `json:"max_gpu_required" yaml:"max_gpu_required"` // 最高GPU数量（动态任务）
+	GPUModel      string     `json:"gpu_model" yaml:"gpu_model"`       // 指定GPU型号
+	Priority      int        `json:"priority" yaml:"priority"`        // 优先级 1-10
+	Status        TaskStatus `json:"status" yaml:"status"`            // 当前状态
+	GPUAssigned   []string   `json:"gpu_assigned" yaml:"gpu_assigned"` // 已分配GPU
+	ContainerID   string     `json:"container_id" yaml:"container_id"` // 容器ID
+	ErrorMsg      string     `json:"error_msg" yaml:"error_msg"`      // 错误信息
+	CreatedAt     time.Time  `json:"created_at" yaml:"created_at"`    // 创建时间
+	StartedAt     *time.Time `json:"started_at" yaml:"started_at"`   // 开始时间
+	FinishedAt    *time.Time `json:"finished_at" yaml:"finished_at"`  // 结束时间
+	RayJobID      string     `json:"ray_job_id" yaml:"ray_job_id"`   // Ray Job ID
+	IsRayTask     bool       `json:"is_ray_task" yaml:"is_ray_task"` // 是否为Ray任务
+	Dynamic       bool       `json:"dynamic" yaml:"dynamic"`          // 是否支持动态调整GPU（true=可动态扩缩容，false=固定GPU）
 }
 
 // NewTask 创建新任务的构造函数
@@ -93,15 +96,18 @@ func NewTask(name, command, image string, gpuRequired int, gpuModel string, prio
 	}
 
 	return &Task{
-		ID:          generateID(),
-		Name:        name,
-		Command:     command,
-		Image:       image,
-		GPURequired: gpuRequired,
-		GPUModel:    gpuModel,
-		Priority:    priority,
-		Status:      TaskStatusPending,
-		CreatedAt:   time.Now(),
+		ID:            generateID(),
+		Name:          name,
+		Command:       command,
+		Image:         image,
+		GPURequired:   gpuRequired,
+		MinGPURequired: gpuRequired, // 默认最小GPU等于请求GPU
+		MaxGPURequired: gpuRequired, // 默认最大GPU等于请求GPU
+		GPUModel:      gpuModel,
+		Priority:      priority,
+		Status:        TaskStatusPending,
+		CreatedAt:     time.Now(),
+		Dynamic:       false, // 默认固定GPU
 	}
 }
 
@@ -124,17 +130,20 @@ func NewRayTask(rayJobID string, gpuRequired int, gpuModel string, priority int)
 	}
 
 	return &Task{
-		ID:          generateID(),
-		Name:        "ray-" + rayJobID,
-		Command:     "",
-		Image:       "",
-		GPURequired: gpuRequired,
-		GPUModel:    gpuModel,
-		Priority:    priority,
-		Status:      TaskStatusPending,
-		RayJobID:    rayJobID,
-		IsRayTask:   true,
-		CreatedAt:   time.Now(),
+		ID:            generateID(),
+		Name:          "ray-" + rayJobID,
+		Command:       "",
+		Image:         "",
+		GPURequired:   gpuRequired,
+		MinGPURequired: gpuRequired,
+		MaxGPURequired: gpuRequired,
+		GPUModel:      gpuModel,
+		Priority:      priority,
+		Status:        TaskStatusPending,
+		RayJobID:      rayJobID,
+		IsRayTask:     true,
+		Dynamic:       true, // Ray任务默认支持动态调整
+		CreatedAt:     time.Now(),
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"gpu-scheduler/internal/config"
 	"gpu-scheduler/internal/docker"
 	"gpu-scheduler/internal/gpu"
+	"gpu-scheduler/internal/models"
 	"gpu-scheduler/internal/scheduler"
 	"net/http"
 	"net/http/httptest"
@@ -564,30 +565,66 @@ func TestRayRelease_AllGPUs(t *testing.T) {
 	}
 }
 
-// TestRayStatusBlocked 测试有阻塞GPU的状态
+// TestRayStatusBlocked 测试释放GPU后可用GPU增加（新行为）
 func TestRayStatusBlocked(t *testing.T) {
 	h := createTestHandler()
 
-	// 分配GPU
-	allocBody := []byte(`{"job_id": "ray-blocked-test", "gpu_count": 1}`)
+	// 查询初始状态
+	w := httptest.NewRecorder()
+	h.RayStatus(w, createTestRequest("GET", "/api/ray/status", nil))
+	var initialResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &initialResult)
+	initialAvailable := initialResult["available_gpus"].(float64)
+
+	// 分配1个GPU
+	allocBody := []byte(`{"job_id": "ray-release-test", "gpu_count": 1}`)
 	allocResp := httptest.NewRecorder()
 	h.RayAllocate(allocResp, createTestRequest("POST", "/api/ray/allocate", allocBody))
 
-	// 阻塞一个GPU
-	blockBody := []byte(`{"gpu_ids": ["gpu1"]}`)
+	// 验证分配后状态
+	w = httptest.NewRecorder()
+	h.RayStatus(w, createTestRequest("GET", "/api/ray/status", nil))
+	var allocResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &allocResult)
+	allocatedAfterAlloc := allocResult["allocated_gpus"].(float64)
+	if allocatedAfterAlloc != 1 {
+		t.Errorf("Expected 1 allocated GPU after allocation, got %f", allocatedAfterAlloc)
+	}
+
+	// 释放一个GPU（新行为：block实际是释放GPU）
+	// 先获取一个已分配的GPU来释放
+	gpus, _ := h.gpuMgr.GetGPUs()
+	var gpuToRelease string
+	for _, gpu := range gpus {
+		if gpu.Status == models.GPUStatusAllocated {
+			gpuToRelease = gpu.ID
+			break
+		}
+	}
+	if gpuToRelease == "" {
+		t.Fatal("No allocated GPU found to release")
+	}
+
+	blockBody := []byte(`{"gpu_ids": ["` + gpuToRelease + `"]}`)
 	blockResp := httptest.NewRecorder()
 	h.RayBlock(blockResp, createTestRequest("POST", "/api/ray/block", blockBody))
 
-	// 查询状态
-	w := httptest.NewRecorder()
+	// 查询状态 - 释放后GPU变为idle，可用GPU应该增加
+	w = httptest.NewRecorder()
 	h.RayStatus(w, createTestRequest("GET", "/api/ray/status", nil))
-
 	var result map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &result)
 
+	// 释放后blocked应该为0（因为GPU变为idle而不是blocked）
 	blocked := result["blocked_gpus"].(float64)
-	if blocked != 1 {
-		t.Errorf("Expected 1 blocked GPU, got %f", blocked)
+	if blocked != 0 {
+		t.Errorf("Expected 0 blocked GPUs (now they become idle), got %f", blocked)
+	}
+
+	// 验证释放后GPU变为idle，可用GPU数量恢复
+	availableAfterRelease := result["available_gpus"].(float64)
+	if availableAfterRelease != initialAvailable {
+		t.Errorf("Expected %f available GPUs after release, got %f", initialAvailable, availableAfterRelease)
 	}
 }
 

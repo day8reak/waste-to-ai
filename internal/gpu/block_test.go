@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestBlockGPU 测试阻塞 GPU
+// TestBlockGPU 测试释放 GPU（使其变为idle）
 func TestBlockGPU(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MockMode = true
@@ -16,24 +16,24 @@ func TestBlockGPU(t *testing.T) {
 
 	mgr := NewGPUManager(cfg)
 
-	// 阻塞 GPU
+	// BlockGPU 现在是释放GPU（使其变为idle）
 	err := mgr.BlockGPU("gpu0")
 	if err != nil {
 		t.Fatalf("BlockGPU failed: %v", err)
 	}
 
-	// 验证 GPU 状态
+	// 验证 GPU 状态变为 idle
 	gpu, err := mgr.GetGPUByID("gpu0")
 	if err != nil {
 		t.Fatalf("GetGPUByID failed: %v", err)
 	}
 
-	if gpu.Status != models.GPUStatusBlocked {
-		t.Errorf("Expected GPU status 'blocked', got '%s'", gpu.Status)
+	if gpu.Status != models.GPUStatusIdle {
+		t.Errorf("Expected GPU status 'idle', got '%s'", gpu.Status)
 	}
 }
 
-// TestBlockGPU_NotFound 测试阻塞不存在的 GPU
+// TestBlockGPU_NotFound 测试释放不存在的 GPU
 func TestBlockGPU_NotFound(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MockMode = true
@@ -46,7 +46,7 @@ func TestBlockGPU_NotFound(t *testing.T) {
 	}
 }
 
-// TestBlockAllocatedGPU 测试阻塞已分配的 GPU
+// TestBlockAllocatedGPU 测试释放已分配的 GPU
 func TestBlockAllocatedGPU(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MockMode = true
@@ -62,64 +62,26 @@ func TestBlockAllocatedGPU(t *testing.T) {
 		t.Fatalf("AllocateGPU failed: %v", err)
 	}
 
-	// 阻塞已分配的 GPU
+	// 释放已分配的 GPU
 	err = mgr.BlockGPU("gpu0")
 	if err != nil {
 		t.Fatalf("BlockGPU failed: %v", err)
 	}
 
-	// 验证 GPU 状态
+	// 验证 GPU 状态变为 idle
 	gpu, _ := mgr.GetGPUByID("gpu0")
-	if gpu.Status != models.GPUStatusBlocked {
-		t.Errorf("Expected GPU status 'blocked', got '%s'", gpu.Status)
-	}
-
-	// TaskID 应该保留（记录之前属于哪个任务）
-	if gpu.TaskID != "task-1" {
-		t.Errorf("Expected TaskID 'task-1', got '%s'", gpu.TaskID)
-	}
-}
-
-// TestUnblockGPU 测试解除阻塞
-func TestUnblockGPU(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MockMode = true
-	cfg.MockGPUs = []config.MockGPUConfig{
-		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
-	}
-
-	mgr := NewGPUManager(cfg)
-
-	// 先阻塞 GPU
-	err := mgr.BlockGPU("gpu0")
-	if err != nil {
-		t.Fatalf("BlockGPU failed: %v", err)
-	}
-
-	// 解除阻塞
-	err = mgr.UnblockGPU("gpu0")
-	if err != nil {
-		t.Fatalf("UnblockGPU failed: %v", err)
-	}
-
-	// 验证 GPU 状态
-	gpu, err := mgr.GetGPUByID("gpu0")
-	if err != nil {
-		t.Fatalf("GetGPUByID failed: %v", err)
-	}
-
 	if gpu.Status != models.GPUStatusIdle {
 		t.Errorf("Expected GPU status 'idle', got '%s'", gpu.Status)
 	}
 
-	// TaskID 应该被清空
+	// TaskID 应该被清空（GPU已释放）
 	if gpu.TaskID != "" {
 		t.Errorf("Expected TaskID to be empty, got '%s'", gpu.TaskID)
 	}
 }
 
-// TestUnblockGPU_NotBlocked 测试解除未阻塞的 GPU
-func TestUnblockGPU_NotBlocked(t *testing.T) {
+// TestBlockReleasedGPU 测试释放已空闲的GPU（幂等操作）
+func TestBlockReleasedGPU(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MockMode = true
 	cfg.MockGPUs = []config.MockGPUConfig{
@@ -128,193 +90,69 @@ func TestUnblockGPU_NotBlocked(t *testing.T) {
 
 	mgr := NewGPUManager(cfg)
 
-	// 尝试解除未阻塞的 GPU 应该失败
-	err := mgr.UnblockGPU("gpu0")
-	if err == nil {
-		t.Error("Expected error when unblocking non-blocked GPU")
-	}
-}
-
-// TestUnblockGPU_NotFound 测试解除不存在的 GPU
-func TestUnblockGPU_NotFound(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MockMode = true
-
-	mgr := NewGPUManager(cfg)
-
-	err := mgr.UnblockGPU("non-existent-gpu")
-	if err == nil {
-		t.Error("Expected error for non-existent GPU")
-	}
-}
-
-// TestGetBlockedGPUs 测试获取被阻塞的 GPU 列表
-func TestGetBlockedGPUs(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MockMode = true
-	cfg.MockGPUs = []config.MockGPUConfig{
-		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
-		{ID: "gpu1", Model: "V100", Memory: 32768, Node: "node1"},
-		{ID: "gpu2", Model: "3090", Memory: 24576, Node: "node2"},
-	}
-
-	mgr := NewGPUManager(cfg)
-
-	// 初始应该没有阻塞的 GPU
-	blocked, err := mgr.GetBlockedGPUs()
-	if err != nil {
-		t.Fatalf("GetBlockedGPUs failed: %v", err)
-	}
-
-	if len(blocked) != 0 {
-		t.Errorf("Expected 0 blocked GPUs initially, got %d", len(blocked))
-	}
-
-	// 阻塞一些 GPU
-	mgr.BlockGPU("gpu0")
-	mgr.BlockGPU("gpu2")
-
-	// 验证阻塞列表
-	blocked, err = mgr.GetBlockedGPUs()
-	if err != nil {
-		t.Fatalf("GetBlockedGPUs failed: %v", err)
-	}
-
-	if len(blocked) != 2 {
-		t.Errorf("Expected 2 blocked GPUs, got %d", len(blocked))
-	}
-
-	// 验证具体 GPU
-	ids := make(map[string]bool)
-	for _, gpu := range blocked {
-		ids[gpu.ID] = true
-	}
-
-	if !ids["gpu0"] {
-		t.Error("gpu0 should be blocked")
-	}
-
-	if !ids["gpu2"] {
-		t.Error("gpu2 should be blocked")
-	}
-}
-
-// TestGetAvailableGPUs_ExcludesBlocked 测试获取可用 GPU 时排除阻塞的
-func TestGetAvailableGPUs_ExcludesBlocked(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MockMode = true
-	cfg.MockGPUs = []config.MockGPUConfig{
-		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
-		{ID: "gpu1", Model: "V100", Memory: 32768, Node: "node1"},
-	}
-
-	mgr := NewGPUManager(cfg)
-
-	// 初始所有 GPU 都可用
-	available, _ := mgr.GetAvailableGPUs()
-	if len(available) != 2 {
-		t.Errorf("Expected 2 available GPUs, got %d", len(available))
-	}
-
-	// 阻塞一个 GPU
-	mgr.BlockGPU("gpu0")
-
-	// 现在应该只有一个可用
-	available, _ = mgr.GetAvailableGPUs()
-	if len(available) != 1 {
-		t.Errorf("Expected 1 available GPU after blocking, got %d", len(available))
-	}
-
-	// 验证可用的是 gpu1
-	if available[0].ID != "gpu1" {
-		t.Errorf("Expected gpu1 to be available, got %s", available[0].ID)
-	}
-}
-
-// TestBlockAlreadyBlockedGPU 测试重复阻塞
-func TestBlockAlreadyBlockedGPU(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MockMode = true
-	cfg.MockGPUs = []config.MockGPUConfig{
-		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
-	}
-
-	mgr := NewGPUManager(cfg)
-
-	// 第一次阻塞
-	err := mgr.BlockGPU("gpu0")
-	if err != nil {
-		t.Fatalf("First BlockGPU failed: %v", err)
-	}
-
-	// 第二次阻塞同一 GPU 应该成功（幂等）
-	err = mgr.BlockGPU("gpu0")
-	if err != nil {
-		t.Fatalf("Second BlockGPU failed: %v", err)
-	}
-
-	// 验证状态仍然是 blocked
-	gpu, _ := mgr.GetGPUByID("gpu0")
-	if gpu.Status != models.GPUStatusBlocked {
-		t.Errorf("Expected GPU status 'blocked', got '%s'", gpu.Status)
-	}
-}
-
-// TestBlockAndUnblockWorkflow 测试完整的阻塞/解除工作流
-func TestBlockAndUnblockWorkflow(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.MockMode = true
-	cfg.MockGPUs = []config.MockGPUConfig{
-		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
-	}
-
-	mgr := NewGPUManager(cfg)
-
-	// 1. 初始状态：GPU 可用
-	available, _ := mgr.GetAvailableGPUs()
-	if len(available) != 1 {
-		t.Fatalf("Expected 1 available GPU, got %d", len(available))
-	}
-
-	// 2. 阻塞 GPU
+	// GPU初始是idle，再次释放应该成功（幂等）
 	err := mgr.BlockGPU("gpu0")
 	if err != nil {
 		t.Fatalf("BlockGPU failed: %v", err)
 	}
 
-	// 3. 验证 GPU 不可用
-	available, _ = mgr.GetAvailableGPUs()
-	if len(available) != 0 {
-		t.Errorf("Expected 0 available GPUs after block, got %d", len(available))
-	}
-
-	// 4. 验证 GPU 在阻塞列表
-	blocked, _ := mgr.GetBlockedGPUs()
-	if len(blocked) != 1 {
-		t.Errorf("Expected 1 blocked GPU, got %d", len(blocked))
-	}
-
-	// 5. 解除阻塞
-	err = mgr.UnblockGPU("gpu0")
-	if err != nil {
-		t.Fatalf("UnblockGPU failed: %v", err)
-	}
-
-	// 6. 验证 GPU 恢复可用
-	available, _ = mgr.GetAvailableGPUs()
-	if len(available) != 1 {
-		t.Errorf("Expected 1 available GPU after unblock, got %d", len(available))
-	}
-
-	// 7. 验证阻塞列表为空
-	blocked, _ = mgr.GetBlockedGPUs()
-	if len(blocked) != 0 {
-		t.Errorf("Expected 0 blocked GPUs after unblock, got %d", len(blocked))
+	// 验证仍然是 idle
+	gpu, _ := mgr.GetGPUByID("gpu0")
+	if gpu.Status != models.GPUStatusIdle {
+		t.Errorf("Expected GPU status 'idle', got '%s'", gpu.Status)
 	}
 }
 
-// TestMultipleBlockAndUnblock 测试多次阻塞/解除
-func TestMultipleBlockAndUnblock(t *testing.T) {
+// TestGetAvailableGPUs_AfterBlock 测试释放GPU后可用GPU数量增加
+func TestGetAvailableGPUs_AfterBlock(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MockMode = true
+	cfg.MockGPUs = []config.MockGPUConfig{
+		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
+		{ID: "gpu1", Model: "V100", Memory: 32768, Node: "node1"},
+	}
+
+	mgr := NewGPUManager(cfg)
+
+	// 初始所有GPU都idle
+	available, _ := mgr.GetAvailableGPUs()
+	if len(available) != 2 {
+		t.Errorf("Expected 2 available GPUs initially, got %d", len(available))
+	}
+
+	// 分配一个GPU
+	mgr.AllocateGPU([]string{"gpu0"}, "task-1")
+
+	// 现在应该只有一个可用
+	available, _ = mgr.GetAvailableGPUs()
+	if len(available) != 1 {
+		t.Errorf("Expected 1 available GPU after allocation, got %d", len(available))
+	}
+
+	// 释放GPU后，应该又变成2个可用
+	mgr.BlockGPU("gpu0")
+
+	available, _ = mgr.GetAvailableGPUs()
+	if len(available) != 2 {
+		t.Errorf("Expected 2 available GPUs after block, got %d", len(available))
+	}
+
+	// 验证可用的是gpu1和gpu0
+	ids := make(map[string]bool)
+	for _, gpu := range available {
+		ids[gpu.ID] = true
+	}
+
+	if !ids["gpu0"] {
+		t.Error("gpu0 should be available after block")
+	}
+	if !ids["gpu1"] {
+		t.Error("gpu1 should be available")
+	}
+}
+
+// TestBlockMultipleGPUs 测试释放多个GPU
+func TestBlockMultipleGPUs(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MockMode = true
 	cfg.MockGPUs = []config.MockGPUConfig{
@@ -325,31 +163,65 @@ func TestMultipleBlockAndUnblock(t *testing.T) {
 
 	mgr := NewGPUManager(cfg)
 
-	// 阻塞 gpu0, gpu1
+	// 分配多个GPU
+	mgr.AllocateGPU([]string{"gpu0", "gpu1", "gpu2"}, "task-1")
+
+	// 释放其中的gpu0和gpu1
 	mgr.BlockGPU("gpu0")
 	mgr.BlockGPU("gpu1")
 
-	// 验证可用 GPU
-	available, _ := mgr.GetAvailableGPUs()
-	if len(available) != 1 {
-		t.Errorf("Expected 1 available GPU, got %d", len(available))
+	// 验证gpu0和gpu1变为idle
+	gpu0, _ := mgr.GetGPUByID("gpu0")
+	gpu1, _ := mgr.GetGPUByID("gpu1")
+	gpu2, _ := mgr.GetGPUByID("gpu2")
+
+	if gpu0.Status != models.GPUStatusIdle {
+		t.Errorf("gpu0 should be idle, got %s", gpu0.Status)
+	}
+	if gpu1.Status != models.GPUStatusIdle {
+		t.Errorf("gpu1 should be idle, got %s", gpu1.Status)
+	}
+	if gpu2.Status != models.GPUStatusAllocated {
+		t.Errorf("gpu2 should still be allocated, got %s", gpu2.Status)
 	}
 
-	// 解除 gpu0
-	mgr.UnblockGPU("gpu0")
-
-	// 验证可用 GPU
-	available, _ = mgr.GetAvailableGPUs()
+	// 验证可用GPU列表
+	available, _ := mgr.GetAvailableGPUs()
 	if len(available) != 2 {
 		t.Errorf("Expected 2 available GPUs, got %d", len(available))
 	}
+}
 
-	// 再次阻塞 gpu0
+// TestBlockGPU_ClearResources 测试释放GPU后资源被清除
+func TestBlockGPU_ClearResources(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.MockMode = true
+	cfg.MockGPUs = []config.MockGPUConfig{
+		{ID: "gpu0", Model: "V100", Memory: 32768, Node: "node1"},
+	}
+
+	mgr := NewGPUManager(cfg)
+
+	// 分配GPU并设置一些资源使用
+	mgr.AllocateGPU([]string{"gpu0"}, "task-1")
+	gpu, _ := mgr.GetGPUByID("gpu0")
+	if gpu.UsedMem == 0 {
+		gpu.UsedMem = 10000 // 模拟占用显存
+		gpu.Util = 80 // 模拟利用率
+	}
+
+	// 释放GPU
 	mgr.BlockGPU("gpu0")
 
-	// 验证可用 GPU
-	available, _ = mgr.GetAvailableGPUs()
-	if len(available) != 1 {
-		t.Errorf("Expected 1 available GPU, got %d", len(available))
+	// 验证资源被清除
+	gpu, _ = mgr.GetGPUByID("gpu0")
+	if gpu.UsedMem != 0 {
+		t.Errorf("Expected UsedMem to be 0, got %d", gpu.UsedMem)
+	}
+	if gpu.Util != 0 {
+		t.Errorf("Expected Util to be 0, got %d", gpu.Util)
+	}
+	if gpu.TaskID != "" {
+		t.Errorf("Expected TaskID to be empty, got %s", gpu.TaskID)
 	}
 }

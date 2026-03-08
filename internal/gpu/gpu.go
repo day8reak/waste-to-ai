@@ -112,7 +112,7 @@ func (m *BaseGPUManager) GetAvailableGPUs() ([]*models.GPUDevice, error) {
 
 	var result []*models.GPUDevice
 	for _, gpu := range m.gpus {
-		// 排除Blocked状态的GPU，这些GPU被CLI手动释放，不能用于推理
+		// 只返回idle状态的GPU
 		if gpu.Status == models.GPUStatusIdle {
 			result = append(result, gpu)
 		}
@@ -265,8 +265,12 @@ func (m *BaseGPUManager) GetAllocatedGPUs() ([]*models.GPUDevice, error) {
 	return result, nil
 }
 
-// BlockGPU 阻塞GPU（CLI手动释放后进入阻塞状态，不能用于推理）
-// 将GPU状态设为Blocked，GetAvailableGPUs会排除此类GPU
+// BlockGPU 阻塞GPU（CLI手动释放后进入阻塞状态，不能用于新的推理任务）
+// 只设置Blocked标记，不改变Status（保持allocated状态，正在运行的任务可以继续使用）
+// GetAvailableGPUs会排除此类GPU
+// BlockGPU 释放GPU（从推理服务中真正释放）
+// 将GPU从当前任务中释放，GPU变为idle，可给其他任务使用
+// 推理服务检测到GPU减少后会自动调整（降低吞吐）
 func (m *BaseGPUManager) BlockGPU(gpuID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -276,33 +280,30 @@ func (m *BaseGPUManager) BlockGPU(gpuID string) error {
 		return fmt.Errorf("GPU %s not found", gpuID)
 	}
 
-	// 无论当前是什么状态，都设为Blocked
-	gpu.Status = models.GPUStatusBlocked
-	// 保持TaskID不变（记录之前属于哪个任务）
-
-	return nil
-}
-
-// UnblockGPU 解除GPU阻塞（恢复可用）
-func (m *BaseGPUManager) UnblockGPU(gpuID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	gpu, ok := m.gpus[gpuID]
-	if !ok {
-		return fmt.Errorf("GPU %s not found", gpuID)
-	}
-
-	// 只有Blocked状态才能解除
-	if gpu.Status != models.GPUStatusBlocked {
-		return fmt.Errorf("GPU %s is not blocked", gpuID)
-	}
-
-	// 恢复为空闲状态
+	// 释放GPU：将GPU状态设为idle，清除任务关联
 	gpu.Status = models.GPUStatusIdle
 	gpu.TaskID = ""
 	gpu.UsedMem = 0
 	gpu.Util = 0
+
+	return nil
+}
+
+// UnblockGPU 解除GPU阻塞（恢复可用于推理）- 已废弃，使用BlockGPU直接释放
+// UnblockGPU 已废弃 - 现在使用BlockGPU直接释放GPU
+// 保留此函数仅用于API兼容
+func (m *BaseGPUManager) UnblockGPU(gpuID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.gpus[gpuID]
+	if !ok {
+		return fmt.Errorf("GPU %s not found", gpuID)
+	}
+
+	// 已废弃：现在释放GPU使用BlockGPU，解除阻塞已无意义
+	// 如果GPU是idle状态，什么都不做
+	// 如果GPU是allocated状态，保持不变
 
 	return nil
 }

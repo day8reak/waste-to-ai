@@ -522,6 +522,20 @@ func (s *Scheduler) ReleaseGPUFromTask(taskID string, gpuIDs []string) (int, err
 		}
 	}
 
+	// 步骤2.5: 检查动态任务的最低GPU保障
+	// 如果是动态任务，释放后不能低于最低GPU数量
+	// 注意：如果释放所有GPU（remaining将为0），则允许释放（任务会完成）
+	if task.Dynamic && task.MinGPURequired > 0 {
+		currentGPUs := len(task.GPUAssigned)
+		remainingAfterRelease := currentGPUs - len(gpusToRelease)
+		// 只有在还有剩余GPU的情况下才检查最低保障
+		// 如果释放后GPU为0（任务完成），则允许
+		if remainingAfterRelease > 0 && remainingAfterRelease < task.MinGPURequired {
+			return 0, fmt.Errorf("cannot release GPU: task %s has minimum %d GPU(s) protected, current %d, release would leave %d",
+				taskID, task.MinGPURequired, currentGPUs, remainingAfterRelease)
+		}
+	}
+
 	// 步骤3: 释放GPU资源
 	if len(gpusToRelease) > 0 {
 		s.gpuManager.ReleaseGPU(gpusToRelease)
@@ -544,7 +558,11 @@ func (s *Scheduler) ReleaseGPUFromTask(taskID string, gpuIDs []string) (int, err
 	}
 	task.GPUAssigned = remaining
 
-	// 步骤5: 如果任务不再占用任何GPU，将其移出运行队列
+	// 步骤5: 无论任务是否还有GPU，都尝试处理等待队列
+	// 这样当GPU释放后，等待队列中的任务可以及时获取资源运行
+	s.processPendingQueue()
+
+	// 步骤6: 如果任务不再占用任何GPU，将其移出运行队列
 	if len(task.GPUAssigned) == 0 {
 		// 停止容器
 		if task.ContainerID != "" {
@@ -557,9 +575,6 @@ func (s *Scheduler) ReleaseGPUFromTask(taskID string, gpuIDs []string) (int, err
 		// 移入已完成集合
 		delete(s.runningTasks, taskID)
 		s.completedTasks[taskID] = task
-
-		// 步骤6: 尝试处理等待队列
-		s.processPendingQueue()
 	}
 
 	return len(gpusToRelease), nil
@@ -620,6 +635,29 @@ func (s *Scheduler) GetStats() map[string]int {
 // GetGPUManager 获取GPU管理器（用于测试）
 func (s *Scheduler) GetGPUManager() gpu.GPUManager {
 	return s.gpuManager
+}
+
+// GetTasksByGPUID 根据GPU ID查找使用该GPU的任务
+//
+// 参数:
+//   - gpuID: GPU ID
+//
+// 返回:
+//   - []*models.Task: 使用该GPU的任务列表
+func (s *Scheduler) GetTasksByGPUID(gpuID string) []*models.Task {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var tasks []*models.Task
+	for _, task := range s.runningTasks {
+		for _, assignedGPU := range task.GPUAssigned {
+			if assignedGPU == gpuID {
+				tasks = append(tasks, task)
+				break
+			}
+		}
+	}
+	return tasks
 }
 
 // HandleGPUFailure 处理GPU故障（自动恢复）
